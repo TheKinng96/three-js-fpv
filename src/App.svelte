@@ -1,24 +1,34 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import * as THREE from 'three';
+  import { generateChunk } from './world.js'; // Assuming world.js handles chunk generation
 	import Hud from './HUD.svelte';
-	import { generateChunk } from './world';
-
   // Scene setup
   let scene, camera, renderer, drone;
   const CHUNK_SIZE = 20; // Size of each chunk in world units
-  let playerPosition = { x: 0, y: 5, z: 0 }; // Drone starts above ground
+  let playerPosition = { x: 0, y: 5, z: 0 }; // Start above ground
   let loadedChunks = new Set();
+  let velocity = new THREE.Vector3(0, 0, 0); // 3D velocity for x, y, z movement
+
+  // Track key states
+  let keys = {
+    ArrowUp: false,
+    ArrowDown: false,
+    ArrowLeft: false,
+    ArrowRight: false,
+    [" "]: false,
+    Shift: false // Use ShiftLeft for down movement
+  };
 
   onMount(() => {
-    // Initialize Three.js
+    // Initialize Three.js scene
     scene = new THREE.Scene();
     camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
     renderer = new THREE.WebGLRenderer();
     renderer.setSize(window.innerWidth, window.innerHeight);
     document.body.appendChild(renderer.domElement);
 
-    // Create drone (simple sphere)
+    // Create drone (a simple red sphere)
     drone = new THREE.Mesh(
       new THREE.SphereGeometry(0.5, 16, 16),
       new THREE.MeshBasicMaterial({ color: 0xff0000 })
@@ -31,16 +41,20 @@
     light.position.set(5, 10, 5);
     scene.add(light);
 
-    // Load initial chunks
+    // Load initial chunks (assuming this function exists)
     loadInitialChunks();
 
-    // Game loop
+    // Add event listeners for key presses
+    window.addEventListener('keydown', keydownHandler);
+    window.addEventListener('keyup', keyupHandler);
+
+    // Animation loop
     function animate() {
       requestAnimationFrame(animate);
       updateDronePosition();
       camera.position.set(drone.position.x, drone.position.y + 1, drone.position.z - 5);
       camera.lookAt(drone.position);
-      manageChunks();
+      manageChunks(); // Assuming this manages world chunks
       renderer.render(scene, camera);
     }
     animate();
@@ -54,31 +68,54 @@
   });
 
   onDestroy(() => {
+    // Clean up event listeners and renderer
+    window.removeEventListener('keydown', keydownHandler);
+    window.removeEventListener('keyup', keyupHandler);
     renderer.dispose();
   });
 
-  // Drone movement (basic controls)
-  let velocity = { x: 0, z: 0 };
+  // Key event handlers
+  function keydownHandler(event) {
+		console.log(event.key)
+    if (keys.hasOwnProperty(event.key)) {
+      keys[event.key] = true;
+			console.log(`Key down: ${event.key}`);
+    }
+  }
+
+  function keyupHandler(event) {
+    if (keys.hasOwnProperty(event.key)) {
+      keys[event.key] = false;
+			console.log(`Key up: ${event.key}`);
+    }
+  }
+
+  // Update drone position based on key states
   function updateDronePosition() {
-    document.addEventListener('keydown', (event) => {
-      const speed = 0.1;
-      switch (event.key) {
-        case 'ArrowUp': velocity.z = -speed; break;
-        case 'ArrowDown': velocity.z = speed; break;
-        case 'ArrowLeft': velocity.x = -speed; break;
-        case 'ArrowRight': velocity.x = speed; break;
-      }
-    });
-    document.addEventListener('keyup', () => {
-      velocity.x = 0;
-      velocity.z = 0;
-    });
-    drone.position.x += velocity.x;
-    drone.position.z += velocity.z;
+    const speed = 0.1; // Movement speed
+    velocity.set(0, 0, 0); // Reset velocity each frame
+
+    // Horizontal movement
+    if (keys.ArrowUp) velocity.z -= speed; // Forward
+    if (keys.ArrowDown) velocity.z += speed; // Backward
+    if (keys.ArrowLeft) velocity.x -= speed; // Left
+    if (keys.ArrowRight) velocity.x += speed; // Right
+
+    // Vertical movement
+    if (keys[" "]) velocity.y += speed; // Up
+    if (keys.Shift) velocity.y -= speed; // Down
+
+    // Apply velocity to drone position
+    drone.position.add(velocity);
+		velocity.multiplyScalar(0.9)
+
+    // Prevent drone from going below ground (y = 0.5 is the drone's radius)
+    if (drone.position.y < 0.5) drone.position.y = 0.5;
+
+    // Update player position for chunk management
     playerPosition = drone.position;
   }
 
-  // Chunk management
   function loadInitialChunks() {
     const startChunkX = Math.floor(playerPosition.x / CHUNK_SIZE);
     const startChunkZ = Math.floor(playerPosition.z / CHUNK_SIZE);
@@ -109,23 +146,21 @@
     });
   }
 
-  function loadChunk(x, z) {
-    const chunk = generateChunk(x, z);
-    chunk.name = `${x},${z}`;
-    scene.add(chunk);
-    loadedChunks.add(`${x},${z}`);
+  function loadChunk(chunkX, chunkZ) {
+    const chunkId = `${chunkX},${chunkZ}`;
+    if (!loadedChunks.has(chunkId)) {
+      const chunk = generateChunk(chunkX * CHUNK_SIZE, chunkZ * CHUNK_SIZE);
+      scene.add(chunk);
+      loadedChunks.add(chunkId);
+    }
   }
 
-  function unloadChunk(x, z) {
-    const chunkKey = `${x},${z}`;
-    const chunk = scene.getObjectByName(chunkKey);
-    if (chunk) {
-      scene.remove(chunk);
-      chunk.traverse(obj => {
-        if (obj.geometry) obj.geometry.dispose();
-        if (obj.material) obj.material.dispose();
-      });
-      loadedChunks.delete(chunkKey);
+  function unloadChunk(chunkX, chunkZ) {
+    const chunkId = `${chunkX},${chunkZ}`;
+    if (loadedChunks.has(chunkId)) {
+      const chunk = scene.getObjectByName(chunkId);
+      if (chunk) scene.remove(chunk);
+      loadedChunks.delete(chunkId);
     }
   }
 </script>
@@ -136,7 +171,7 @@
 	:global(body) {
 		padding: 0;
 	}
-  canvas {
+  :global(canvas) {
     position: absolute;
     top: 0;
     left: 0;
